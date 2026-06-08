@@ -35,12 +35,11 @@ def upload_file(conn, file_bytes, filename, notes=""):
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise ValueError("File exceeds 16MB limit.")
     safe_filename = sanitize_filename(filename)
-    hex_data = binascii.hexlify(file_bytes).decode("ascii")
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO BARCODE_UPLOADS.PUBLIC.FILE_UPLOADS (FILENAME, FILE_EXT, FILE_SIZE, FILE_DATA, NOTES) "
-        "SELECT %s, %s, %s, TO_BINARY(%s, 'HEX'), %s",
-        (safe_filename, ext, len(file_bytes), hex_data, notes),
+        "VALUES (%s, %s, %s, %s, %s)",
+        (safe_filename, ext, len(file_bytes), file_bytes, notes),
     )
     cursor.close()
 
