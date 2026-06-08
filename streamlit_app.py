@@ -1,9 +1,10 @@
 import streamlit as st
 import snowflake.connector
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 import os
 from datetime import datetime
 import hashlib
-import binascii
 
 st.set_page_config(page_title="Upload Portal", layout="centered")
 st.title("Photo & Video Upload")
@@ -12,11 +13,22 @@ st.write("Upload your photos or videos securely. No login required.")
 MAX_FILE_SIZE_MB = 16
 ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".mp4", ".mov", ".avi", ".mkv", ".webm"]
 
-def get_snowflake_connection():
+def get_connection():
+    private_key_text = st.secrets["snowflake"]["private_key"]
+    p_key = serialization.load_pem_private_key(
+        private_key_text.encode(),
+        password=None,
+        backend=default_backend()
+    )
+    pkb = p_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
     return snowflake.connector.connect(
         account=st.secrets["snowflake"]["account"],
         user=st.secrets["snowflake"]["user"],
-        password=st.secrets["snowflake"]["password"],
+        private_key=pkb,
         warehouse=st.secrets["snowflake"]["warehouse"],
         database=st.secrets["snowflake"]["database"],
         schema=st.secrets["snowflake"]["schema"],
@@ -47,7 +59,7 @@ def process_upload(file_bytes, original_filename, notes):
     filename = timestamp + "_" + original_filename
     with st.spinner("Uploading..."):
         try:
-            conn = get_snowflake_connection()
+            conn = get_connection()
             upload_file(conn, file_bytes, filename, notes)
             conn.close()
             st.success("Uploaded " + original_filename + " successfully!")
