@@ -4,13 +4,15 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 import os
 from datetime import datetime
-import hashlib
+import uuid
+import math
 
 st.set_page_config(page_title="Upload Portal", layout="centered")
 st.title("Photo & Video Upload")
 st.write("Upload your photos or videos securely. No login required.")
 
-MAX_FILE_SIZE_MB = 16
+MAX_FILE_SIZE_MB = 200
+CHUNK_SIZE = 15 * 1024 * 1024
 ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".mp4", ".mov", ".avi", ".mkv", ".webm"]
 
 def get_connection():
@@ -44,14 +46,22 @@ def upload_file(conn, file_bytes, filename, notes=""):
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError("File type not allowed: " + ext)
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValueError("File exceeds 16MB limit.")
+        raise ValueError("File exceeds 200MB limit.")
     safe_filename = sanitize_filename(filename)
+    total_size = len(file_bytes)
+    total_chunks = math.ceil(total_size / CHUNK_SIZE)
+    upload_id = str(uuid.uuid4())
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO BARCODE_UPLOADS.PUBLIC.FILE_UPLOADS (FILENAME, FILE_EXT, FILE_SIZE, FILE_DATA, NOTES) "
-        "VALUES (%s, %s, %s, %s, %s)",
-        (safe_filename, ext, len(file_bytes), file_bytes, notes),
-    )
+    for i in range(total_chunks):
+        start = i * CHUNK_SIZE
+        end = min(start + CHUNK_SIZE, total_size)
+        chunk = file_bytes[start:end]
+        cursor.execute(
+            "INSERT INTO BARCODE_UPLOADS.PUBLIC.FILE_CHUNKS "
+            "(UPLOAD_ID, CHUNK_INDEX, TOTAL_CHUNKS, FILENAME, FILE_EXT, TOTAL_FILE_SIZE, CHUNK_DATA, NOTES) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (upload_id, i, total_chunks, safe_filename, ext, total_size, chunk, notes),
+        )
     cursor.close()
 
 def process_upload(file_bytes, original_filename, notes):
