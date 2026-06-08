@@ -39,19 +39,13 @@ def upload_to_stage(conn, file_bytes, filename):
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
         raise ValueError("File exceeds 200MB limit.")
     safe_filename = sanitize_filename(filename)
-    tmp_dir = tempfile.mkdtemp()
-    tmp_path = os.path.join(tmp_dir, safe_filename)
-    with open(tmp_path, "wb") as f:
-        f.write(file_bytes)
-    try:
-        cursor = conn.cursor()
-        sql = "PUT file://" + tmp_path + " @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE AUTO_COMPRESS=FALSE SOURCE_COMPRESSION=NONE OVERWRITE=FALSE PARALLEL=1"
-        cursor.execute(sql)
-        cursor.close()
-    finally:
-        os.remove(tmp_path)
-        os.rmdir(tmp_dir)
-
+    import io
+    cursor = conn.cursor()
+    cursor.execute(
+        "PUT file:///tmp/placeholder @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE/" + safe_filename + " AUTO_COMPRESS=FALSE OVERWRITE=FALSE",
+        file_stream=io.BytesIO(file_bytes)
+    )
+    cursor.close()
 
 def log_upload(conn, filename, file_size, file_hash, notes=""):
     cursor = conn.cursor()
