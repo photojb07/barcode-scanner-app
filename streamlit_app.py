@@ -35,25 +35,22 @@ def sanitize_filename(name):
 def upload_to_stage(conn, file_bytes, filename):
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError("File type " + ext + " not allowed.")
+        raise ValueError("File type not allowed: " + ext)
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValueError("File exceeds " + str(MAX_FILE_SIZE_MB) + "MB limit.")
-
+        raise ValueError("File exceeds 200MB limit.")
     safe_filename = sanitize_filename(filename)
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
-
+    tmp_dir = tempfile.mkdtemp()
+    tmp_path = os.path.join(tmp_dir, safe_filename)
+    with open(tmp_path, "wb") as f:
+        f.write(file_bytes)
     try:
         cursor = conn.cursor()
-        stage_path = "@BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE/" + safe_filename
-        cursor.execute(
-            "PUT file://" + tmp_path + " " + stage_path + " AUTO_COMPRESS=FALSE OVERWRITE=FALSE"
-        )
+        sql = "PUT file://" + tmp_path + " @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE AUTO_COMPRESS=FALSE OVERWRITE=FALSE"
+        cursor.execute(sql)
         cursor.close()
     finally:
         os.remove(tmp_path)
+        os.rmdir(tmp_dir)
 
 
 def log_upload(conn, filename, file_size, file_hash, notes=""):
