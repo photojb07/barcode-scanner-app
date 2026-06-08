@@ -1,18 +1,16 @@
 import streamlit as st
 import snowflake.connector
-import tempfile
 import os
 from datetime import datetime
 import hashlib
+import binascii
 
 st.set_page_config(page_title="Upload Portal", layout="centered")
-
 st.title("Photo & Video Upload")
 st.write("Upload your photos or videos securely. No login required.")
 
-MAX_FILE_SIZE_MB = 200
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".mp4", ".mov", ".avi", ".mkv", ".webm"}
-
+MAX_FILE_SIZE_MB = 16
+ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".mp4", ".mov", ".avi", ".mkv", ".webm"]
 
 @st.cache_resource
 def get_snowflake_connection():
@@ -26,55 +24,38 @@ def get_snowflake_connection():
         role=st.secrets["snowflake"]["role"],
     )
 
-
 def sanitize_filename(name):
     safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
     return safe[:100]
 
-
-def upload_to_stage(conn, file_bytes, filename):
+def upload_file(conn, file_bytes, filename, notes=""):
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError("File type not allowed: " + ext)
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValueError("File exceeds 200MB limit.")
+        raise ValueError("File exceeds 16MB limit.")
     safe_filename = sanitize_filename(filename)
-    import io
+    hex_data = binascii.hexlify(file_bytes).decode("ascii")
     cursor = conn.cursor()
     cursor.execute(
-        "PUT file:///tmp/" + safe_filename + " @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE AUTO_COMPRESS=FALSE OVERWRITE=FALSE",
-        file_stream=io.BytesIO(file_bytes)
+        "INSERT INTO BARCODE_UPLOADS.PUBLIC.FILE_UPLOADS (FILENAME, FILE_EXT, FILE_SIZE, FILE_DATA, NOTES) "
+        "SELECT %s, %s, %s, TO_BINARY(%s, 'HEX'), %s",
+        (safe_filename, ext, len(file_bytes), hex_data, notes),
     )
     cursor.close()
-
-def log_upload(conn, filename, file_size, file_hash, notes=""):
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO BARCODE_UPLOADS.PUBLIC.UPLOAD_LOG "
-        "(BARCODE_VALUE, FILENAME, FILE_SIZE, FILE_HASH, NOTES) "
-        "VALUES (%s, %s, %s, %s, %s)",
-        ("UPLOAD", sanitize_filename(filename), file_size, file_hash, notes),
-    )
-    cursor.close()
-
 
 def process_upload(file_bytes, original_filename, notes):
-    ext = os.path.splitext(original_filename)[1].lower() if original_filename else ".jpg"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = timestamp + "_" + sanitize_filename(original_filename)
-    file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
-
+    filename = timestamp + "_" + original_filename
     with st.spinner("Uploading..."):
         try:
             conn = get_snowflake_connection()
-            upload_to_stage(conn, file_bytes, filename)
-            log_upload(conn, filename, len(file_bytes), file_hash, notes)
-            st.success("Uploaded **" + original_filename + "** successfully!")
+            upload_file(conn, file_bytes, filename, notes)
+            st.success("Uploaded " + original_filename + " successfully!")
         except ValueError as e:
             st.error(str(e))
         except Exception as e:
             st.error("Upload failed: " + str(e))
-
 
 tab1, tab2 = st.tabs(["Take Photo", "Upload File"])
 
@@ -95,8 +76,8 @@ with tab2:
     if uploaded_files:
         notes = st.text_input("Add a note (optional)", key="file_notes")
         if st.button("Upload All", key="file_upload"):
-            for uploaded_file in uploaded_files:
-                process_upload(uploaded_file.getvalue(), uploaded_file.name, notes)
+            for uf in uploaded_files:
+                process_upload(uf.getvalue(), uf.name, notes)
 
 st.divider()
 st.caption("Upload only. Files are securely stored and cannot be deleted from this app.")
