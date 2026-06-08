@@ -12,7 +12,6 @@ st.write("Upload your photos or videos securely. No login required.")
 MAX_FILE_SIZE_MB = 16
 ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".mp4", ".mov", ".avi", ".mkv", ".webm"]
 
-@st.cache_resource
 def get_snowflake_connection():
     return snowflake.connector.connect(
         account=st.secrets["snowflake"]["account"],
@@ -50,6 +49,7 @@ def process_upload(file_bytes, original_filename, notes):
         try:
             conn = get_snowflake_connection()
             upload_file(conn, file_bytes, filename, notes)
+            conn.close()
             st.success("Uploaded " + original_filename + " successfully!")
         except ValueError as e:
             st.error(str(e))
