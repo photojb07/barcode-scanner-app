@@ -49,4 +49,95 @@ def upload_to_stage(conn, file_bytes, filename):
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError(f"File type {ext} not allowed.")
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValueError(f"File exceeds {MAX_FILE_SIZE_
+        raise ValueError(f"File exceeds {MAX_FILE_SIZE_MB}MB limit.")
+
+    safe_filename = sanitize_filename(filename)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"PUT file://{tmp_path} @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE/{safe_filename} AUTO_COMPRESS=FALSE OVERWRITE=FALSE"
+        )
+        cursor.close()
+    finally:
+        os.remove(tmp_path)
+
+
+def log_upload(conn, barcode_value, filename, file_size, file_hash, notes=""):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO BARCODE_UPLOADS.PUBLIC.UPLOAD_LOG "
+        "(BARCODE_VALUE, FILENAME, FILE_SIZE, FILE_HASH, NOTES) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (barcode_value, sanitize_filename(filename), file_size, file_hash, notes),
+    )
+    cursor.close()
+
+
+def process_upload(file_bytes, original_filename, barcodes, notes):
+    ext = os.path.splitext(original_filename)[1] if original_filename else ".jpg"
+    barcode_value = barcodes[0]["data"] if barcodes else "NO_BARCODE"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{sanitize_filename(barcode_value)}_{timestamp}{ext}"
+    file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
+
+    with st.spinner("Uploading..."):
+        try:
+            conn = get_snowflake_connection()
+            upload_to_stage(conn, file_bytes, filename)
+            log_upload(conn, barcode_value, filename, len(file_bytes), file_hash, notes)
+            st.success(f"Uploaded **{filename}** successfully!")
+        except ValueError as e:
+            st.error(str(e))
+        except Exception as e:
+            st.error(f"Upload failed: {e}")
+
+
+tab1, tab2 = st.tabs(["Camera", "File Upload"])
+
+with tab1:
+    camera_photo = st.camera_input("Take a photo of a barcode")
+    if camera_photo is not None:
+        image = Image.open(camera_photo)
+        st.image(image, caption="Captured Photo", use_container_width=True)
+
+        barcodes = scan_barcode(image)
+        if barcodes:
+            st.success(f"Found {len(barcodes)} barcode(s)!")
+            for bc in barcodes:
+                st.write(f"**Type:** {bc['type']} | **Value:** {bc['data']}")
+        else:
+            st.warning("No barcode detected. You can still upload the image.")
+
+        notes = st.text_input("Add a note (optional)", key="camera_notes")
+
+        if st.button("Upload Photo", key="camera_upload"):
+            process_upload(camera_photo.getvalue(), "camera.jpg", barcodes, notes)
+
+with tab2:
+    uploaded_file = st.file_uploader(
+        "Upload an image", type=["jpg", "jpeg", "png", "gif", "bmp"]
+    )
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Image", use_container_width=True)
+
+        barcodes = scan_barcode(image)
+        if barcodes:
+            st.success(f"Found {len(barcodes)} barcode(s)!")
+            for bc in barcodes:
+                st.write(f"**Type:** {bc['type']} | **Value:** {bc['data']}")
+        else:
+            st.warning("No barcode detected. You can still upload the image.")
+
+        notes = st.text_input("Add a note (optional)", key="file_notes")
+
+        if st.button("Upload Image", key="file_upload"):
+            process_upload(uploaded_file.getvalue(), uploaded_file.name, barcodes, notes)
+
+st.divider()
+st.caption("Upload only. Images are securely stored and cannot be deleted from this app.")
