@@ -11,10 +11,7 @@ st.title("Photo & Video Upload")
 st.write("Upload your photos or videos securely. No login required.")
 
 MAX_FILE_SIZE_MB = 200
-ALLOWED_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic",
-    ".mp4", ".mov", ".avi", ".mkv", ".webm"
-}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 @st.cache_resource
@@ -38,9 +35,9 @@ def sanitize_filename(name):
 def upload_to_stage(conn, file_bytes, filename):
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"File type {ext} not allowed.")
+        raise ValueError("File type " + ext + " not allowed.")
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValueError(f"File exceeds {MAX_FILE_SIZE_MB}MB limit.")
+        raise ValueError("File exceeds " + str(MAX_FILE_SIZE_MB) + "MB limit.")
 
     safe_filename = sanitize_filename(filename)
 
@@ -50,8 +47,9 @@ def upload_to_stage(conn, file_bytes, filename):
 
     try:
         cursor = conn.cursor()
+        stage_path = "@BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE/" + safe_filename
         cursor.execute(
-            f"PUT file://{tmp_path} @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE/{safe_filename} AUTO_COMPRESS=FALSE OVERWRITE=FALSE"
+            "PUT file://" + tmp_path + " " + stage_path + " AUTO_COMPRESS=FALSE OVERWRITE=FALSE"
         )
         cursor.close()
     finally:
@@ -72,7 +70,7 @@ def log_upload(conn, filename, file_size, file_hash, notes=""):
 def process_upload(file_bytes, original_filename, notes):
     ext = os.path.splitext(original_filename)[1].lower() if original_filename else ".jpg"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}_{sanitize_filename(original_filename)}"
+    filename = timestamp + "_" + sanitize_filename(original_filename)
     file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
 
     with st.spinner("Uploading..."):
@@ -80,11 +78,11 @@ def process_upload(file_bytes, original_filename, notes):
             conn = get_snowflake_connection()
             upload_to_stage(conn, file_bytes, filename)
             log_upload(conn, filename, len(file_bytes), file_hash, notes)
-            st.success(f"Uploaded **{original_filename}** successfully!")
+            st.success("Uploaded **" + original_filename + "** successfully!")
         except ValueError as e:
             st.error(str(e))
         except Exception as e:
-            st.error(f"Upload failed: {e}")
+            st.error("Upload failed: " + str(e))
 
 
 tab1, tab2 = st.tabs(["Take Photo", "Upload File"])
