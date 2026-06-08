@@ -45,7 +45,7 @@ def upload_to_stage(conn, file_bytes, filename):
         f.write(file_bytes)
     try:
         cursor = conn.cursor()
-        sql = "PUT file://" + tmp_path + " @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE AUTO_COMPRESS=FALSE SOURCE_COMPRESSION=NONE OVERWRITE=FALSE"
+        sql = "PUT file://" + tmp_path + " @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE AUTO_COMPRESS=FALSE SOURCE_COMPRESSION=NONE OVERWRITE=FALSE PARALLEL=1"
         cursor.execute(sql)
         cursor.close()
     finally:
