@@ -42,7 +42,7 @@ def upload_to_stage(conn, file_bytes, filename):
     import io
     cursor = conn.cursor()
     cursor.execute(
-        "PUT file:///tmp/placeholder @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE/" + safe_filename + " AUTO_COMPRESS=FALSE OVERWRITE=FALSE",
+        "PUT file:///tmp/" + safe_filename + " @BARCODE_UPLOADS.PUBLIC.IMAGE_STAGE AUTO_COMPRESS=FALSE OVERWRITE=FALSE",
         file_stream=io.BytesIO(file_bytes)
     )
     cursor.close()
