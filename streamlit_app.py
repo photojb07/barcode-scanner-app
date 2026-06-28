@@ -1,82 +1,111 @@
+# Barcode scanner app with chunked file upload for large video support
+# Co-authored with CoCo
 import streamlit as st
 import snowflake.connector
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
 import os
 from datetime import datetime
+import hashlib
 import uuid
-import math
+from cryptography.hazmat.primitives import serialization
 
 st.set_page_config(page_title="Upload Portal", layout="centered")
+
 st.title("Photo & Video Upload")
 st.write("Upload your photos or videos securely. No login required.")
 
 MAX_FILE_SIZE_MB = 200
-CHUNK_SIZE = 15 * 1024 * 1024
-ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".mp4", ".mov", ".avi", ".mkv", ".webm"]
+CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB per chunk — safe for BINARY(8388608) with hex overhead
+ALLOWED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm"
+}
 
-def get_connection():
-    private_key_text = st.secrets["snowflake"]["private_key"]
-    p_key = serialization.load_pem_private_key(
-        private_key_text.encode(),
-        password=None,
-        backend=default_backend()
-    )
-    pkb = p_key.private_bytes(
+
+@st.cache_resource
+def get_snowflake_connection():
+    private_key_pem = st.secrets["snowflake"]["private_key"].encode()
+    private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+    private_key_bytes = private_key.private_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption()
+        encryption_algorithm=serialization.NoEncryption(),
     )
     return snowflake.connector.connect(
         account=st.secrets["snowflake"]["account"],
         user=st.secrets["snowflake"]["user"],
-        private_key=pkb,
+        private_key=private_key_bytes,
         warehouse=st.secrets["snowflake"]["warehouse"],
         database=st.secrets["snowflake"]["database"],
         schema=st.secrets["snowflake"]["schema"],
         role=st.secrets["snowflake"]["role"],
     )
 
+
 def sanitize_filename(name):
     safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in name)
     return safe[:100]
 
-def upload_file(conn, file_bytes, filename, notes=""):
+
+def upload_in_chunks(conn, file_bytes, filename, notes=""):
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError("File type not allowed: " + ext)
+        raise ValueError(f"File type {ext} not allowed.")
     if len(file_bytes) > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValueError("File exceeds 200MB limit.")
+        raise ValueError(f"File exceeds {MAX_FILE_SIZE_MB}MB limit.")
+
     safe_filename = sanitize_filename(filename)
-    total_size = len(file_bytes)
-    total_chunks = math.ceil(total_size / CHUNK_SIZE)
-    upload_id = str(uuid.uuid4())
+    upload_id = uuid.uuid4().hex[:16]
+    total_chunks = (len(file_bytes) + CHUNK_SIZE - 1) // CHUNK_SIZE
+
     cursor = conn.cursor()
-    for i in range(total_chunks):
-        start = i * CHUNK_SIZE
-        end = min(start + CHUNK_SIZE, total_size)
-        chunk = file_bytes[start:end]
-        cursor.execute(
-            "INSERT INTO BARCODE_UPLOADS.PUBLIC.FILE_CHUNKS "
-            "(UPLOAD_ID, CHUNK_INDEX, TOTAL_CHUNKS, FILENAME, FILE_EXT, TOTAL_FILE_SIZE, CHUNK_DATA, NOTES) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (upload_id, i, total_chunks, safe_filename, ext, total_size, chunk, notes),
-        )
+    progress_bar = st.progress(0, text=f"Uploading {safe_filename}...")
+    try:
+        for i in range(total_chunks):
+            chunk = file_bytes[i * CHUNK_SIZE : (i + 1) * CHUNK_SIZE]
+            cursor.execute(
+                "INSERT INTO BARCODE_UPLOADS.PUBLIC.FILE_CHUNKS "
+                "(UPLOAD_ID, CHUNK_INDEX, TOTAL_CHUNKS, FILENAME, FILE_EXT, "
+                "TOTAL_FILE_SIZE, CHUNK_DATA, NOTES) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (upload_id, i, total_chunks, safe_filename, ext,
+                 len(file_bytes), chunk, notes),
+            )
+            progress_bar.progress((i + 1) / total_chunks, text=f"Chunk {i+1}/{total_chunks}")
+        progress_bar.empty()
+    finally:
+        cursor.close()
+
+    return upload_id
+
+
+def log_upload(conn, filename, file_size, file_hash, notes=""):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO BARCODE_UPLOADS.PUBLIC.UPLOAD_LOG "
+        "(BARCODE_VALUE, FILENAME, FILE_SIZE, FILE_HASH, NOTES) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        ("UPLOAD", sanitize_filename(filename), file_size, file_hash, notes),
+    )
     cursor.close()
 
+
 def process_upload(file_bytes, original_filename, notes):
+    ext = os.path.splitext(original_filename)[1].lower() if original_filename else ".jpg"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = timestamp + "_" + original_filename
+    filename = f"{timestamp}_{sanitize_filename(original_filename)}"
+    file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
+
     with st.spinner("Uploading..."):
         try:
-            conn = get_connection()
-            upload_file(conn, file_bytes, filename, notes)
-            conn.close()
-            st.success("Uploaded " + original_filename + " successfully!")
+            conn = get_snowflake_connection()
+            upload_in_chunks(conn, file_bytes, filename, notes)
+            log_upload(conn, filename, len(file_bytes), file_hash, notes)
+            st.success(f"Uploaded **{original_filename}** successfully!")
         except ValueError as e:
             st.error(str(e))
         except Exception as e:
-            st.error("Upload failed: " + str(e))
+            st.error(f"Upload failed: {e}")
+
 
 tab1, tab2 = st.tabs(["Take Photo", "Upload File"])
 
@@ -97,8 +126,8 @@ with tab2:
     if uploaded_files:
         notes = st.text_input("Add a note (optional)", key="file_notes")
         if st.button("Upload All", key="file_upload"):
-            for uf in uploaded_files:
-                process_upload(uf.getvalue(), uf.name, notes)
+            for uploaded_file in uploaded_files:
+                process_upload(uploaded_file.getvalue(), uploaded_file.name, notes)
 
 st.divider()
 st.caption("Upload only. Files are securely stored and cannot be deleted from this app.")
